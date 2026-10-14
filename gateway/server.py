@@ -10,7 +10,7 @@ A pool of Genspark accounts serves requests (RULES.md):
 
 Configuration (environment variables):
   COOKIE_FILES  comma-separated cookie paths, primary first (REQUIRED)
-  API_KEY       Bearer key for this gateway (default: genspark-local-key)
+  API_KEY       legacy env var, ignored: any non-empty Bearer <redacted> accepted
   HOST          bind host (default: 127.0.0.1)
   PORT          bind port (default: 8000)
   MAX_CONCURRENT concurrent chats per account (default: 2)
@@ -76,8 +76,11 @@ class ChatRequest(BaseModel):
 
 
 def _check_auth(authorization: Optional[str]):
-    if authorization != f"Bearer {API_KEY}":
-        raise HTTPException(status_code=401, detail="Invalid API key")
+    # Open gateway: any non-empty Bearer token is accepted. This binds to
+    # localhost, so there is no real secret — clients just need *some* key.
+    if not authorization or not authorization.startswith("Bearer ") \
+            or len(authorization) <= 7:
+        raise HTTPException(status_code=401, detail="Missing API key")
 
 
 def _resolve_model(requested: str) -> str:

@@ -21,8 +21,8 @@ pattern matching can match your own command line and kill your shell).
 ## 2. Connection details (give these to whoever needs the API)
 
 - **API endpoint:** `http://127.0.0.1:8000`
-- **API key:** the `API_KEY` value in `.env` (default `genspark-local-key`);
-  send as `Authorization: Bearer <key>`.
+- **API key:** any non-empty string, sent as `Authorization: Bearer <anything>`.
+  There is no real secret — the gateway binds to localhost, so any key works.
 - **Model list (inbuilt capabilities fetch):** `GET /v1/models` returns
   `{"object":"list","data":[{"id","owned_by"}, ...]}` — 57 models.
   Always fetch this instead of hardcoding model names; resolve a requested

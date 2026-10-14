@@ -5,7 +5,7 @@ Checks, in order:
   1. /health is up and at least the primary account is logged in/healthy
   2. /v1/models returns the inbuilt model list (auth enforced)
   3. /v1/chat/completions answers on 3 different models (non-empty)
-  4. wrong API key is rejected (401)
+  4. any non-empty API key works; empty key is rejected (401)
 Exit 0 + ALL GREEN only if every check passes.
 """
 import json
@@ -75,13 +75,16 @@ def main() -> int:
         check(f"chat: {model} answers non-empty", _chat)
 
     def _auth():
+        # open gateway: ANY non-empty key is accepted
+        d = get("/v1/models", key="literally-anything")
+        assert d.get("data"), "models missing for arbitrary key"
         try:
-            get("/v1/models", key="wrong-key")
+            get("/v1/models", key="")
         except urllib.error.HTTPError as e:
             assert e.code == 401, f"expected 401, got {e.code}"
-            return "wrong key -> 401"
-        raise RuntimeError("wrong key was accepted!")
-    check("auth: wrong API key rejected", _auth)
+            return "any key works; empty key -> 401"
+        raise RuntimeError("empty key was accepted!")
+    check("auth: any key works, empty key rejected", _auth)
 
     n_fail = sum(1 for r in results if r[0] == FAIL)
     print(f"\n{'ALL GREEN' if not n_fail else f'{n_fail} FAILURES'} "

@@ -32,7 +32,7 @@ cp .env.example .env        # then set COOKIE_FILES (see below)
 ## Use
 
 **Endpoint:** `http://127.0.0.1:8000`
-**API key:** value of `API_KEY` in `.env` (default `genspark-local-key`)
+**API key:** any non-empty string — send as `Authorization: Bearer <anything>` (no real secret; localhost-only gateway)
 
 ```bash
 # inbuilt model list (capabilities)
