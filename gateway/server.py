@@ -39,6 +39,13 @@ from genspark_client import stream_text, KNOWN_MODELS, DEFAULT_MODEL
 
 COOKIE_FILES = [c.strip() for c in
                 os.environ.get("COOKIE_FILES", "").split(",") if c.strip()]
+if not COOKIE_FILES:
+    # auto-discover: cookies/ dir first, then cookies*.txt in repo root
+    _here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    import glob as _glob
+    COOKIE_FILES = sorted(
+        _glob.glob(os.path.join(_here, "cookies", "cookies*.txt")) or
+        _glob.glob(os.path.join(_here, "cookies*.txt")))
 API_KEY = os.environ.get("API_KEY", "genspark-local-key")
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8000"))

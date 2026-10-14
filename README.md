@@ -12,10 +12,14 @@ fetch the model list inbuilt, and call any model.
 ```bash
 git clone <this-repo> && cd genspark-gateway
 ./scripts/install.sh        # creates venv, installs deps
-cp .env.example .env        # then set COOKIE_FILES (see below)
-./scripts/start.py           # starts on 127.0.0.1:8000
+# drop your cookies1.txt, cookies2.txt, ... into cookies/  (see cookies/README.md)
+./scripts/start.py           # starts on 127.0.0.1:8000, auto-finds all cookies
 ./venv/bin/python scripts/test_gateway.py   # ALL GREEN check
 ```
+
+No config needed: the gateway auto-discovers `cookies/cookies*.txt`
+(primary first). `COOKIE_FILES` in `.env` overrides this if you prefer
+explicit paths.
 
 ### Getting `COOKIE_FILES`
 
