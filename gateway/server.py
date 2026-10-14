@@ -55,7 +55,11 @@ if not COOKIE_FILES:
 app = FastAPI(title="Genspark Multi-Account Gateway")
 pool = AccountPool(COOKIE_FILES, MAX_CONCURRENT, MIN_START_GAP_S)
 if STARTUP_PROBE:
-    print("startup probe:", pool.startup_probe(), flush=True)
+    if len(COOKIE_FILES) > 10:
+        # large pool: fast free login check; sick accounts degrade lazily
+        print("quick check:", pool.quick_check(), flush=True)
+    else:
+        print("startup probe:", pool.startup_probe(), flush=True)
 
 
 class ChatMessage(BaseModel):

@@ -133,6 +133,32 @@ class AccountPool:
             })
         return out
 
+    def quick_check(self) -> dict[str, str]:
+        """Fast, free health filter for large pools: is_logged_in only,
+        no chats burned. Batches 10 at a time. Sick-but-logged-in accounts
+        are caught lazily by the 5-consecutive-empty degrade rule."""
+        results = {}
+
+        def check_one(acct: Account):
+            try:
+                ok = acct.clients[0].is_logged_in()
+                results[acct.name] = "OK" if ok else "NOT_LOGGED_IN"
+                if not ok:
+                    with self._lock:
+                        acct.degraded_until = time.time() + DEGRADE_SECONDS
+            except Exception as e:
+                results[acct.name] = f"ERR {str(e)[:40]}"
+                with self._lock:
+                    acct.degraded_until = time.time() + DEGRADE_SECONDS
+
+        threads = [threading.Thread(target=check_one, args=(a,))
+                   for a in self.accounts]
+        for i in range(0, len(threads), 10):
+            batch = threads[i:i + 10]
+            [t.start() for t in batch]
+            [t.join() for t in batch]
+        return results
+
     def startup_probe(self, model: str = "claude-4-5-haiku") -> dict[str, str]:
         """One tiny chat per account; degrade the ones that come back empty.
         Costs one small request per account — buys accurate initial routing."""
