@@ -2,12 +2,11 @@
 """Green-check for the genspark-gateway. Run: ./venv/bin/python scripts/test_gateway.py
 
 Checks, in order:
-  1. /health is up and the account is logged in
+  1. /health is up and at least the primary account is logged in/healthy
   2. /v1/models returns the inbuilt model list (auth enforced)
   3. /v1/chat/completions answers on 3 different models (non-empty)
   4. wrong API key is rejected (401)
 Exit 0 + ALL GREEN only if every check passes.
-Costs ~4 Genspark credits.
 """
 import json
 import os
@@ -48,10 +47,12 @@ def post_chat(model, prompt, key=KEY, timeout=300):
 
 
 def main() -> int:
-    check("health: gateway up, account logged in",
-          lambda: (lambda h: f"{h['account']} models={h['models']}"
-                   if h.get("logged_in") else (_ for _ in ()).throw(
-                       RuntimeError("not logged in")))(get("/health")))
+    check("health: gateway up, primary account healthy",
+          lambda: (lambda h: f"{h['accounts'][0]['account']} "
+                   f"models={h['models']}"
+                   if h["accounts"] and h["accounts"][0]["healthy"] else
+                   (_ for _ in ()).throw(
+                       RuntimeError("primary account not healthy")))(get("/health")))
 
     def _models():
         d = get("/v1/models")

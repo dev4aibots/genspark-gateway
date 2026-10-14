@@ -1,6 +1,6 @@
 # AGENTS.md — for any coding agent using this repo
 
-You are working with **genspark-gateway**: one Genspark account exposed as an
+You are working with **genspark-gateway**: Genspark accounts exposed as an
 OpenAI-compatible API. Follow this file exactly.
 
 ## 1. Start the service
@@ -11,8 +11,9 @@ cd <repo-root>
 ```
 
 Requirements: `./scripts/install.sh` must have been run once (venv + deps),
-and `.env` must exist with `COOKIE_FILE` pointing at a Genspark login cookie.
-Health: `curl -sf http://127.0.0.1:8000/health` → `{"logged_in": true, ...}`.
+and `.env` must exist with `COOKIE_FILES` pointing at Genspark login cookies
+(comma-separated, primary first).
+Health: `curl -sf http://127.0.0.1:8000/health` → per-account stats.
 
 To stop: `./venv/bin/python scripts/stop.py` (PID-based; never `pkill -f` —
 pattern matching can match your own command line and kill your shell).
@@ -39,13 +40,15 @@ pattern matching can match your own command line and kill your shell).
 
 Rules:
 - **One request → one complete response.** Put everything the model needs
-  in a single prompt. Never do multi-request loops (each request = 1 credit,
-  100/day per account).
-- The gateway queues and paces requests itself (max 2 concurrent, 6s gaps).
-  Fire-and-forget parallel bursts are handled, just slower.
-- A `502` means Genspark returned empty after retries — do NOT treat it as
-  an answer; wait a minute and retry once. A `503` means the account is out
-  of credits until the daily refill.
+  in a single prompt. Never do multi-request loops.
+- **Smart multi-account pool:** the primary account (first in
+  `COOKIE_FILES`) serves everything it can; parallel bursts automatically
+  spill to the other accounts. Per-account envelope is always respected
+  (max 2 concurrent, 6s gaps). Fire parallel requests freely — the pool
+  queues and routes them.
+- A `502` means Genspark returned empty after retries across accounts —
+  do NOT treat it as an answer; wait a minute and retry once. A `503`
+  means all accounts are busy or degraded; back off and retry.
 - Never forward an empty `content` to the user as a result.
 
 ## 4. Verify before you claim it works
@@ -60,7 +63,9 @@ the cause and re-run — do not report success on partial greens.
 ## 5. Conventions
 
 - Never commit `.env`, `*cookie*`, `*.log`, `*.pid`, `venv/`.
-- Config lives in env/`.env`, never hardcoded: `COOKIE_FILE`, `API_KEY`,
-  `HOST`, `PORT`, `MAX_CONCURRENT`, `MIN_START_GAP_S`.
+- Config lives in env/`.env`, never hardcoded: `COOKIE_FILES`, `API_KEY`,
+  `HOST`, `PORT`, `MAX_CONCURRENT`, `MIN_START_GAP_S`, `STARTUP_PROBE`.
 - The client in `genspark_client/` is vendored MIT upstream (see
   `ATTRIBUTION.md`); prefer small local patches over forks.
+- The measured operating rules live in `RULES.md` — read it before tuning
+  any envelope parameter.

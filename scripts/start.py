@@ -48,11 +48,13 @@ def main() -> int:
     port = int(os.environ.get("PORT", "8000"))
     pidfile = os.path.join(HERE, "gateway.pid")
     log = os.path.join(HERE, "gateway.log")
-    cookie = os.environ.get("COOKIE_FILE", "")
-    if not cookie or not os.path.exists(cookie):
-        print(f"COOKIE_FILE not set or missing: {cookie!r}", file=sys.stderr)
-        print("Copy .env.example to .env and point COOKIE_FILE at your "
-              "Genspark login cookie file.", file=sys.stderr)
+    cookie = os.environ.get("COOKIE_FILES", "")
+    cookies = [c.strip() for c in cookie.split(",") if c.strip()]
+    if not cookies or not all(os.path.exists(c) for c in cookies):
+        print(f"COOKIE_FILES not set or missing: {cookie!r}", file=sys.stderr)
+        print("Copy .env.example to .env and point COOKIE_FILES at your "
+              "Genspark login cookie files (comma-separated, primary first).",
+              file=sys.stderr)
         return 2
     if port_open(port):
         print(f"gateway already up on 127.0.0.1:{port}")

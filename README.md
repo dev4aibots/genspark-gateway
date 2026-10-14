@@ -1,8 +1,8 @@
 # genspark-gateway
 
-One Genspark account → an OpenAI-compatible API with **57 flagship models**
+Genspark accounts → an OpenAI-compatible API with **57 flagship models**
 (Claude Opus 5.5, GPT-5.5/6, Gemini 3.x, Grok 4.x, DeepSeek, Kimi, GLM…),
-free via Genspark's daily credits. Single request → one complete response.
+free via Genspark. Single request → one complete response.
 
 Built for **coding agents**: start the service, read the endpoint + key below,
 fetch the model list inbuilt, and call any model.
@@ -12,18 +12,20 @@ fetch the model list inbuilt, and call any model.
 ```bash
 git clone <this-repo> && cd genspark-gateway
 ./scripts/install.sh        # creates venv, installs deps
-cp .env.example .env        # then set COOKIE_FILE (see below)
+cp .env.example .env        # then set COOKIE_FILES (see below)
 ./scripts/start.py           # starts on 127.0.0.1:8000
-./venv/bin/python scripts/test_gateway.py   # ALL GREEN check (~4 credits)
+./venv/bin/python scripts/test_gateway.py   # ALL GREEN check
 ```
 
-### Getting `COOKIE_FILE`
+### Getting `COOKIE_FILES`
 
 1. Log in to [genspark.ai](https://genspark.ai) in your browser (free account).
 2. Open DevTools → Application → Cookies → copy the session cookies into a
    text file, e.g. `~/genspark-cookie.txt`, in Netscape cookie-jar format
    (the `genspark_client` reads it with `http.cookiejar`).
-3. Set `COOKIE_FILE=/absolute/path/to/your-genspark-cookie.txt` in `.env`.
+3. Set `COOKIE_FILES=/absolute/path/to/cookie1.txt,/absolute/path/to/cookie2.txt`
+   in `.env` — comma-separated, **primary first**. Add as many accounts as
+   you have; the pool spreads parallel load across them automatically.
 
 > Cookies are secrets: `.gitignore` excludes them — never commit them.
 
@@ -47,25 +49,29 @@ curl -H "Authorization: Bearer genspark-local-key" \
 curl http://127.0.0.1:8000/health
 ```
 
-`stream: true` is supported (SSE). Each request costs 1 Genspark credit
-(100/day per free account, refills daily).
+`stream: true` is supported (SSE).
 
 ## How it stays seamless
 
 Genspark voids bursts: >~6 rapid or highly-concurrent chats on one account
-come back as empty HTTP-200s (still burning credits). The gateway enforces
-the measured safe envelope instead of letting you hit it:
+come back as silent empty HTTP-200s. The gateway enforces the measured safe
+envelope (see `RULES.md`) instead of letting you hit it:
 
-- **max 2 concurrent chats**, extras queue (6s pacer between starts),
+- **smart multi-account pool**: primary account serves everything it can;
+  parallel bursts automatically spill to other accounts,
+- **max 2 concurrent chats per account**, extras queue (6s pacer between starts),
 - **one dedicated client session per slot** (a shared session across
   threads gets later chats voided),
-- **empty-response guard**: retries automatically, never forwards empty
-  text; persistent empties → clear `503 out of credits` instead of garbage.
+- **empty-response guard**: retries on a *different* account, never forwards
+  empty text; 5 consecutive empties → account auto-degraded 5 min, then
+  re-probed (accounts recover on their own).
 
 ## Layout
 
 ```
 gateway/server.py        the service (env-configured, see .env.example)
+gateway/pool.py          smart multi-account pool (routing, health, degrade)
+RULES.md                 measured operating rules (from live tests)
 genspark_client/         Genspark API client (vendored, MIT — see ATTRIBUTION.md)
 scripts/install.sh       venv + deps
 scripts/start.py         PID-based safe start (idempotent)

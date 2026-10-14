@@ -1,44 +1,44 @@
 #!/usr/bin/env python3
-"""Single-account Genspark gateway — OpenAI-compatible, seamless by design.
+"""Multi-account Genspark gateway — OpenAI-compatible, seamless by design.
 
-ONE Genspark account serves all requests through:
-  - a concurrency cap (default 2) with a dedicated client session per slot
-    (a shared session across threads gets later chats voided by Genspark),
-  - a pacer (default 6s between chat starts; bursts get voided into empty
-    HTTP-200 responses),
-  - an empty-response guard (retries, never forwards empty text),
-  - a drained-account guard (clear 503 instead of silent garbage).
+A pool of Genspark accounts serves requests (RULES.md):
+  - primary account (first in COOKIE_FILES) serves everything it can;
+  - parallel bursts automatically spill to other accounts;
+  - per-account envelope always respected (2 concurrent, 6s start gap);
+  - empty retries go to a DIFFERENT account;
+  - 5 consecutive empties -> account degraded 5 min, auto re-probed.
 
 Configuration (environment variables):
-  COOKIE_FILE   path to a Genspark login cookie file (REQUIRED)
-  API_KEY       bearer key for this gateway (default: genspark-local-key)
+  COOKIE_FILES  comma-separated cookie paths, primary first (REQUIRED)
+  API_KEY       Bearer key for this gateway (default: genspark-local-key)
   HOST          bind host (default: 127.0.0.1)
   PORT          bind port (default: 8000)
-  MAX_CONCURRENT concurrent chats (default: 2)
-  MIN_START_GAP_S seconds between chat starts (default: 6.0)
+  MAX_CONCURRENT concurrent chats per account (default: 2)
+  MIN_START_GAP_S seconds between chat starts per account (default: 6.0)
+  STARTUP_PROBE true/false: probe each account once at startup (default: true)
 
 Endpoints:
-  GET  /health               {"account","logged_in","inflight",...}
+  GET  /health               {"accounts":[{...per-account stats...}],...}
   GET  /v1/models            OpenAI-style model list (inbuilt capabilities)
   POST /v1/chat/completions  OpenAI-style chat (non-streaming or SSE stream)
 
-One request = one complete response. Each request costs 1 Genspark credit.
+One request = one complete response. Never forwards empty/broken output.
 """
 import json
 import os
-import threading
 import time
 import uuid
-from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from genspark_client import GensparkClient, stream_text, KNOWN_MODELS, DEFAULT_MODEL
+from gateway.pool import AccountPool
+from genspark_client import stream_text, KNOWN_MODELS, DEFAULT_MODEL
 
-COOKIE_FILE = os.environ.get("COOKIE_FILE", "")
+COOKIE_FILES = [c.strip() for c in
+                os.environ.get("COOKIE_FILES", "").split(",") if c.strip()]
 API_KEY = os.environ.get("API_KEY", "genspark-local-key")
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8000"))
@@ -46,24 +46,16 @@ MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "2"))
 MIN_START_GAP_S = float(os.environ.get("MIN_START_GAP_S", "6.0"))
 RETRY_DELAY_S = 12
 MAX_ATTEMPTS = 3
-DRAINED_AFTER_EMPTIES = 5
+STARTUP_PROBE = os.environ.get("STARTUP_PROBE", "true").lower() == "true"
 
-if not COOKIE_FILE:
-    raise SystemExit("COOKIE_FILE is not set. See .env.example.")
+if not COOKIE_FILES:
+    raise SystemExit("COOKIE_FILES not set: comma-separated cookie paths, "
+                     "primary first")
 
-app = FastAPI(title="Genspark Single-Account Gateway")
-
-_slots: list[GensparkClient] = [
-    GensparkClient(cookie_file=COOKIE_FILE) for _ in range(MAX_CONCURRENT)
-]
-_slots_free: list[GensparkClient] = list(_slots)
-_slots_lock = threading.Lock()
-_gate = threading.Semaphore(MAX_CONCURRENT)
-_pacer_lock = threading.Lock()
-_last_start = 0.0
-_state_lock = threading.Lock()
-_consec_empty = 0
-_inflight = 0
+app = FastAPI(title="Genspark Multi-Account Gateway")
+pool = AccountPool(COOKIE_FILES, MAX_CONCURRENT, MIN_START_GAP_S)
+if STARTUP_PROBE:
+    print("startup probe:", pool.startup_probe(), flush=True)
 
 
 class ChatMessage(BaseModel):
@@ -94,73 +86,51 @@ def _resolve_model(requested: str) -> str:
     return DEFAULT_MODEL
 
 
-def _chat_once(client: GensparkClient, prompt: str, model: str) -> str:
-    resp = client.chat(prompt, model=model)
+def _chat_once(acct, slot: int, prompt: str, model: str) -> str:
+    resp = acct.clients[slot].chat(prompt, model=model)
     if getattr(resp, "status_code", 200) != 200:
         raise RuntimeError(f"upstream HTTP {resp.status_code}")
     return "".join(stream_text(resp))
 
 
-def _chat_seamless(prompt: str, model: str) -> str:
-    """Queued, paced, guarded chat. Never returns empty without raising."""
-    global _consec_empty, _last_start, _inflight
-    with _state_lock:
-        if _consec_empty >= DRAINED_AFTER_EMPTIES:
+def _chat_seamless(prompt: str, model: str) -> tuple[str, str]:
+    """Queued, paced, pool-routed chat. Returns (text, account_name).
+    Never returns empty without raising."""
+    exclude = set()
+    for attempt in range(MAX_ATTEMPTS):
+        if attempt:
+            time.sleep(RETRY_DELAY_S)
+        try:
+            acct, slot = pool.acquire(
+                exclude=exclude,
+                timeout=30.0 if attempt else 300.0)
+        except TimeoutError:
             raise HTTPException(
                 status_code=503,
-                detail="Genspark account appears out of credits "
-                       "(consecutive empty responses). Credits refill daily.")
-    _gate.acquire()
-    try:
-        with _slots_lock:
-            client = _slots_free.pop()
+                detail="All Genspark accounts busy or degraded; "
+                       "try again shortly.")
         try:
-            with _pacer_lock:
-                wait = MIN_START_GAP_S - (time.time() - _last_start)
-                if wait > 0:
-                    time.sleep(wait)
-                _last_start = time.time()
-            with _state_lock:
-                _inflight += 1
-            try:
-                text = ""
-                for attempt in range(MAX_ATTEMPTS):
-                    if attempt:
-                        time.sleep(RETRY_DELAY_S)
-                    text = _chat_once(client, prompt, model)
-                    if text.strip():
-                        break
-                if text.strip():
-                    with _state_lock:
-                        _consec_empty = 0
-                    return text
-                with _state_lock:
-                    _consec_empty += 1
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Genspark returned empty responses "
-                           f"({MAX_ATTEMPTS} attempts); not forwarding "
-                           f"broken output.")
-            finally:
-                with _state_lock:
-                    _inflight -= 1
+            pool.wait_gap(acct)  # per-account pacer
+            text = _chat_once(acct, slot, prompt, model)
+            if text.strip():
+                pool.record_ok(acct)
+                return text, acct.name
+            pool.record_empty(acct)
+            exclude.add(acct)  # retry on a DIFFERENT account
         finally:
-            with _slots_lock:
-                _slots_free.append(client)
-    finally:
-        _gate.release()
+            pool.release(acct, slot)
+    raise HTTPException(
+        status_code=502,
+        detail=f"Genspark returned empty responses ({MAX_ATTEMPTS} attempts "
+               f"across accounts); not forwarding broken output.")
 
 
 @app.get("/health")
 def health():
-    with _state_lock:
-        return {"account": Path(COOKIE_FILE).name,
-                "logged_in": _slots[0].is_logged_in(),
-                "inflight": _inflight,
-                "max_concurrent": MAX_CONCURRENT,
-                "min_start_gap_s": MIN_START_GAP_S,
-                "consec_empty": _consec_empty,
-                "models": len(KNOWN_MODELS)}
+    return {"accounts": pool.stats(),
+            "max_concurrent_per_account": MAX_CONCURRENT,
+            "min_start_gap_s": MIN_START_GAP_S,
+            "models": len(KNOWN_MODELS)}
 
 
 @app.get("/v1/models")
@@ -182,7 +152,7 @@ def chat_completions(req: ChatRequest,
     if not prompt:
         raise HTTPException(status_code=400, detail="No prompt provided")
 
-    text = _chat_seamless(prompt, model)
+    text, _acct = _chat_seamless(prompt, model)
     cid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     if req.stream:
         def gen():
@@ -211,10 +181,6 @@ def chat_completions(req: ChatRequest,
                       "total_tokens": 0}}
 
 
-def main() -> None:
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=HOST, port=PORT)
-
-
-if __name__ == "__main__":
-    main()
