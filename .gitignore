@@ -1,0 +1,13 @@
+# secrets — never commit
+.env
+cookies*.txt
+*cookie*.txt
+*.log
+*.pid
+# python
+__pycache__/
+*.pyc
+venv/
+.venv/
+# test artifacts
+test-results/
