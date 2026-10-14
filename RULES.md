@@ -25,13 +25,14 @@ silently voids your chats into empty HTTP-200 responses.
 8. **Never run two gateway processes on the same account simultaneously.**
    Interleaved requests void each other while burning usage.
 
-## Credit honesty (what we proved vs didn't)
+## What the pool optimizes for (user principle)
 
-9. **No proven per-message credit cost.** The UI shows per-model multipliers
-   (Opus 5.5 4×, GPT-5.5 5×, Haiku 5.5 0.1×) but no numeric balance was ever
-   readable via API. In 100+ test requests we NEVER saw an "out of credits"
-   message — silent empties look like throttling/voiding, not billing.
-   Treat empties as a throttling signal. Never claim a credit formula.
+9. **The only signal is working responses.** Route on success/failure only —
+   never on credit balance or any hidden quota. A numeric balance endpoint
+   exists (`GET /api/payment/get_credit_balance`) and may be read as a
+   passive diagnostic, but it must never change routing, retries, or any
+   request rule. Credits are not our problem until requests stop working;
+   when they do, the empty-response handling above already routes around it.
 10. **Accounts recover on their own.** Hammered accounts returned empties,
-    then worked again hours later. The pool's degrade-and-reprobe handles
+    then worked again later. The pool's degrade-and-reprobe handles
     this without human intervention.
